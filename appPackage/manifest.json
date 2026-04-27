@@ -1,0 +1,110 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "version": "1.0.0",
+  "manifestVersion": "1.16",
+  "id": "ac487906-7f7a-47c5-b70b-4df3836c8542",
+  "name": {
+    "short": "AI Bot",
+    "full": "AI Assistant Bot"
+  },
+  "developer": {
+    "name": "Ishita",
+    "websiteUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net",
+    "privacyUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net/privacy",
+    "termsOfUseUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net/terms"
+  },
+  "description": {
+    "short": "AI-powered assistant",
+    "full": "An AI assistant powered by LangChain and OpenAI."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "configurableTabs": [
+    {
+      "configurationUrl": "https://teams-app-test-bot-ishita.azurewebsites.net/configure",
+      "canUpdateConfiguration": true,
+      "scopes": [
+        "team"
+      ],
+      "context": [
+        "privateChatTab",
+        "channelTab"
+      ],
+      "supportedSharePointHosts": [
+        "sharePointFullPage",
+        "sharePointWebPart"
+      ]
+    }
+  ],
+  "bots": [
+    {
+      "botId": "ac487906-7f7a-47c5-b70b-4df3836c8542",
+      "scopes": [
+        "personal",
+        "team",
+        "groupChat"
+      ],
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false,
+      "supportsFiles": true
+    }
+  ],
+  "validDomains": [
+    "my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net"
+  ],
+  "webApplicationInfo": {
+    "id": "ac487906-7f7a-47c5-b70b-4df3836c8542"
+  },
+  "showLoadingIndicator": true,
+  "configurableProperties": [
+    "name",
+    "shortDescription",
+    "smallImageUrl"
+  ],
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMessage.Read.Group",
+          "type": "Application"
+        },
+        {
+          "name": "Calls.AccessMedia.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "Calls.JoinGroupCalls.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMessage.Send.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMessage.Read.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "ChatSettings.ReadWrite.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "Chat.Manage.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMember.Read.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "TeamsTab.ReadWrite.Chat",
+          "type": "Application"
+        }
+      ]
+    }
+  }
+}

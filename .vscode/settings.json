@@ -1,0 +1,42 @@
+{
+  "python.analysis.extraPaths": [
+    "C:/Users/Asus/OneDrive - Tecnoprism Private Limited/Desktop/AI Agent with langchain/teams-langchain-bot/venv/Lib/site-packages"
+  ],
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.defaultInterpreterPath": "C:/Users/Asus/OneDrive - Tecnoprism Private Limited/Desktop/AI Agent with langchain/teams-langchain-bot/venv/Scripts/python.exe",
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "appService.zipIgnorePattern": [
+    "__pycache__{,/**}",
+    "*.py[cod]",
+    "*$py.class",
+    ".Python{,/**}",
+    "build{,/**}",
+    "develop-eggs{,/**}",
+    "dist{,/**}",
+    "downloads{,/**}",
+    "eggs{,/**}",
+    ".eggs{,/**}",
+    "lib{,/**}",
+    "lib64{,/**}",
+    "parts{,/**}",
+    "sdist{,/**}",
+    "var{,/**}",
+    "wheels{,/**}",
+    "share/python-wheels{,/**}",
+    "*.egg-info{,/**}",
+    ".installed.cfg",
+    "*.egg",
+    "MANIFEST",
+    ".env{,/**}",
+    ".venv{,/**}",
+    "env{,/**}",
+    "venv{,/**}",
+    "ENV{,/**}",
+    "env.bak{,/**}",
+    "venv.bak{,/**}",
+    ".vscode{,/**}"
+  ],
+  "appService.defaultWebAppToDeploy": "/subscriptions/ea9e9852-e1bf-43dd-9eb3-ddcdc9bd2781/resourceGroups/Resorce_Group_Teams_app_intigration__Bot_Ishita/providers/Microsoft.Web/sites/my-teams-web-app",
+  "appService.deploySubpath": "."
+}
