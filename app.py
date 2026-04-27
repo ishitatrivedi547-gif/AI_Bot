@@ -92,6 +92,31 @@ TEAMS_TENANT_ID = os.environ.get("App_TENANT_ID", "")
 # Token cache (simple in-memory cache)
 _token_cache = {"token": None, "expires_at": None}
  
+def _build_reply(activity: dict, text: str) -> dict:
+
+    return {
+
+        "type": "message",
+
+        "timestamp": datetime.utcnow().isoformat(),
+
+        "from": activity.get("recipient") or {
+
+            "id": TEAMS_APP_ID,
+
+            "name": BOT_NAME
+
+        },
+
+        "conversation": activity.get("conversation"),
+
+        "recipient": activity.get("from"),
+
+        "replyToId": activity.get("id"),
+
+        "text": text,
+
+    }
  
 async def _get_aad_token() -> str:
     """
@@ -126,11 +151,40 @@ async def _get_aad_token() -> str:
     except Exception as e:
         logger.error(f"Error acquiring AAD token: {e}")
         return None
+    
+async def send_reply_to_teams(service_url, conversation_id, reply):
+
+    url = f"{service_url}v3/conversations/{conversation_id}/activities"
+ 
+    token = await _get_aad_token()
+ 
+    headers = {
+
+        "Authorization": f"Bearer {token}",
+
+        "Content-Type": "application/json"
+
+    }
+ 
+    async with aiohttp.ClientSession() as session:
+
+        async with session.post(url, json=reply, headers=headers) as resp:
+
+            text = await resp.text()
+
+            if resp.status not in [200, 201]:
+
+                logger.error(f"Failed: {resp.status} - {text}")
+
+                return False
+ 
+    return True
  
  
-async def send_reply_to_teams(service_url: str, conversation_id: str, activity_id: str, reply_text: str) -> bool:
+ 
+"""async def send_reply_to_teams(service_url: str, conversation_id: str, activity_id: str, reply_text: str) -> bool:
     """
-    Send reply back to Teams via Bot Connector API with AAD Bearer token.
+    #Send reply back to Teams via Bot Connector API with AAD Bearer token.
     """
     url = f"{service_url}v3/conversations/{conversation_id}/activities"
     reply_data = {
@@ -156,7 +210,7 @@ async def send_reply_to_teams(service_url: str, conversation_id: str, activity_i
                 return True
     except Exception as e:
         logger.error(f"Error sending reply to Teams: {e}")
-        return False
+        return False"""
  
  
 def run_async_task(coro):
