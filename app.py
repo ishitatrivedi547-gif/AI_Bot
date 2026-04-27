@@ -87,7 +87,7 @@ BOT_NAME = "AI Bot"
 # Azure AD Configuration (load from environment variables)
 TEAMS_APP_ID = os.environ.get("APP_ID", "")
 TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
-TEAMS_TENANT_ID = os.environ.get("TenantId", "")
+TEAMS_TENANT_ID = os.environ.get("App_TENANT_ID", "")
  
 # Token cache (simple in-memory cache)
 _token_cache = {"token": None, "expires_at": None}
