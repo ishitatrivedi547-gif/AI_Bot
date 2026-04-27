@@ -132,11 +132,10 @@ async def send_reply_to_teams(service_url: str, conversation_id: str, activity_i
     """
     Send reply back to Teams via Bot Connector API with AAD Bearer token.
     """
-    url = f"{service_url}v3/conversations/{conversation_id}/activities/{activity_id}"
+    url = f"{service_url}v3/conversations/{conversation_id}/activities"
     reply_data = {
         "type": "message",
-        "text": reply_text,
-        "from": {"id": BOT_ID, "name": BOT_NAME},
+        "text": reply_text
     }
     try:
         token = await _get_aad_token()
