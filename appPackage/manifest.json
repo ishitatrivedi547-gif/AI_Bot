@@ -9,9 +9,9 @@
   },
   "developer": {
     "name": "Ishita",
-    "websiteUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net",
-    "privacyUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net/privacy",
-    "termsOfUseUrl": "https://my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net/terms"
+    "websiteUrl": "https://ai-bot-lvlp.onrender.com",
+    "privacyUrl": "https://ai-bot-lvlp.onrender.com/privacy",
+    "termsOfUseUrl": "https://ai-bot-lvlp.onrender.com/terms"
   },
   "description": {
     "short": "AI-powered assistant",
@@ -24,7 +24,7 @@
   "accentColor": "#FFFFFF",
   "configurableTabs": [
     {
-      "configurationUrl": "https://teams-app-test-bot-ishita.azurewebsites.net/configure",
+      "configurationUrl": "https://ai-bot-lvlp.onrender.com/configure",
       "canUpdateConfiguration": true,
       "scopes": [
         "team"
@@ -54,7 +54,7 @@
     }
   ],
   "validDomains": [
-    "my-teams-web-app-gvc5f0akdsgag3cx.centralindia-01.azurewebsites.net"
+    "https://ai-bot-lvlp.onrender.com"
   ],
   "webApplicationInfo": {
     "id": "ac487906-7f7a-47c5-b70b-4df3836c8542"
