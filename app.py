@@ -229,20 +229,32 @@ import os
 import asyncio
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
+from functools import wraps
+from threading import Lock
 
 import aiohttp
 import jwt
 import requests as req_lib
 from flask import Flask, request, Response
 
-# ====== CONFIG ======
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-BOT_NAME = "AI Bot"
-TEAMS_APP_ID = os.environ.get("APP_ID")
-TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD")
-TEAMS_TENANT_ID = os.environ.get("APP_TENANT_ID")
 
-# Validate required env vars at startup
+#   CONFIG                                                     
+
+# OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+BOT_NAME = os.environ.get("BOT_NAME", "AI Bot")
+TEAMS_APP_ID = os.environ.get("APP_ID","ac487906-7f7a-47c5-b70b-4df3836c8542")
+TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD","8Iu8Q~wh6FcJZ1p-EO7q0Gsgr1pWQAO~DEEr5aEj")
+TEAMS_TENANT_ID = os.environ.get("APP_TENANT_ID","0ac02500-802f-4a4c-bad2-7cd68064d701")
+PORT = int(os.environ.get("PORT", 8000))
+
+MAX_MESSAGE_LENGTH = 4000
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+MICROSOFT_BOT_FRAMEWORK_KEYS_URL = (
+    "https://login.botframework.com/v1/.well-known/keys"
+)
+
 REQUIRED_VARS = {
     "OPENAI_API_KEY": OPENAI_API_KEY,
     "APP_ID": TEAMS_APP_ID,
@@ -251,40 +263,103 @@ REQUIRED_VARS = {
 }
 missing = [k for k, v in REQUIRED_VARS.items() if not v]
 if missing:
-    raise RuntimeError(f"Missing required environment variables: {missing}")
+    print(f"❌ Missing required env vars: {', '.join(missing)}")
+    raise SystemExit(1)
 
-MAX_MESSAGE_LENGTH = 4000
-MICROSOFT_BOT_FRAMEWORK_KEYS_URL = "https://login.botframework.com/v1/.well-known/keys"
 
-# ====== LOGGING ======
+
+#   LOGGING                                                    
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-application = app
+application = app  # for WSGI servers like gunicorn
 
-# ====== TOKEN CACHE ======
-_token_cache = {"token": None, "expires_at": None}
+#  TOKEN CACHES (thread-safe)                                 
 
-# ====== SHARED HTTP SESSION ======
-_session = None
+class TokenCache:
+    """Thread-safe token cache with automatic expiry."""
+
+    def __init__(self, buffer_seconds: int = 300):
+        self._token = None
+        self._expires_at = None
+        self._lock = Lock()
+        self._buffer = timedelta(seconds=buffer_seconds)
+
+    @property
+    def is_valid(self) -> bool:
+        with self._lock:
+            return (
+                self._token is not None
+                and self._expires_at is not None
+                and datetime.now(timezone.utc) < self._expires_at
+            )
+
+    def get(self) -> str | None:
+        with self._lock:
+            return self._token
+
+    def set(self, token: str, expires_in: int):
+        with self._lock:
+            self._token = token
+            self._expires_at = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=expires_in)
+                - self._buffer
+            )
 
 
-async def get_session():
-    """Reuse a single aiohttp session for connection pooling."""
+class JWKSCache:
+    """Thread-safe JWKS cache — refresh every 24 h or on cache miss."""
+
+    def __init__(self):
+        self._keys: dict = {}
+        self._expires_at: datetime | None = None
+        self._lock = Lock()
+
+    @property
+    def is_valid(self) -> bool:
+        with self._lock:
+            return (
+                bool(self._keys)
+                and self._expires_at is not None
+                and datetime.now(timezone.utc) < self._expires_at
+            )
+
+    def get_key(self, kid: str):
+        with self._lock:
+            return self._keys.get(kid)
+
+    def refresh(self, keys: list):
+        with self._lock:
+            self._keys = {k["kid"]: k for k in keys if "kid" in k}
+            self._expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+
+aad_token_cache = TokenCache(buffer_seconds=300)
+jwks_cache = JWKSCache()
+
+
+#   SHARED ASYNC HTTP SESSION                                  
+
+_session: aiohttp.ClientSession | None = None
+
+
+async def get_session() -> aiohttp.ClientSession:
     global _session
     if _session is None or _session.closed:
         _session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=60)
+            timeout=aiohttp.ClientTimeout(total=60),
+            connector=aiohttp.TCPConnector(limit=20),
         )
     return _session
 
 
-def cleanup_session():
-    """Close the shared session on shutdown."""
+def _cleanup_session():
     global _session
     if _session and not _session.closed:
         loop = asyncio.new_event_loop()
@@ -293,50 +368,73 @@ def cleanup_session():
 
 
 import atexit
-atexit.register(cleanup_session)
+atexit.register(_cleanup_session)
 
 
-# ====== ASYNC RUNNER ======
+
+#   ASYNC HELPER (works inside & outside running loops)        
+
 def run_async(coro):
-    """Safely run async code whether or not a loop is already running."""
+    """Run a coroutine safely whether or not an event loop is active."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result()
-    else:
         return asyncio.run(coro)
 
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        return pool.submit(asyncio.run, coro).result()
 
-# ====== TOKEN VERIFICATION ======
+#   JWT / TOKEN VERIFICATION                                   
+
+def _fetch_jwks() -> list | None:
+    """Fetch Microsoft's public signing keys (cached 24 h)."""
+    try:
+        resp = req_lib.get(MICROSOFT_BOT_FRAMEWORK_KEYS_URL, timeout=10)
+        resp.raise_for_status()
+        keys = resp.json().get("keys", [])
+        jwks_cache.refresh(keys)
+        logger.info("JWKS refreshed (%d keys)", len(keys))
+        return keys
+    except Exception as e:
+        logger.error("Failed to fetch JWKS: %s", e)
+        return None
+
+
 def verify_token(auth_header: str) -> bool:
-    """Verify that the incoming request is from Microsoft Bot Framework."""
+    """Verify the incoming request is from Microsoft Bot Framework."""
     if not auth_header or not auth_header.startswith("Bearer "):
         logger.warning("Missing or malformed Authorization header")
         return False
 
-    token = auth_header.split(" ")[1]
+    token = auth_header.split(" ", 1)[1]
 
     try:
-        # Fetch Microsoft's public signing keys (cache this in production)
-        jwks = req_lib.get(MICROSOFT_BOT_FRAMEWORK_KEYS_URL, timeout=10).json()
         unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get("kid")
+        if not kid:
+            logger.warning("Token header missing 'kid'")
+            return False
 
-        for key in jwks.get("keys", []):
-            if key.get("kid") == unverified_header.get("kid"):
-                public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
-                jwt.decode(
-                    token,
-                    public_key,
-                    algorithms=["RS256"],
-                    audience=TEAMS_APP_ID,
-                    issuer="https://api.botframework.com",
-                )
-                return True
+        # Try cached keys first, then refresh on miss
+        key_data = jwks_cache.get_key(kid)
+        if key_data is None:
+            keys = _fetch_jwks()
+            if not keys:
+                return False
+            key_data = jwks_cache.get_key(kid)
+        if key_data is None:
+            logger.warning("No matching signing key found (kid=%s)", kid)
+            return False
+
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
+        jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            audience=TEAMS_APP_ID,
+            issuer="https://api.botframework.com",
+        )
+        return True
 
     except jwt.ExpiredSignatureError:
         logger.warning("Token expired")
@@ -344,34 +442,25 @@ def verify_token(auth_header: str) -> bool:
         logger.warning("Invalid token audience")
     except jwt.InvalidIssuerError:
         logger.warning("Invalid token issuer")
+    except jwt.ImmatureSignatureError:
+        logger.warning("Token not yet valid (nbf)")
+    except jwt.InvalidSignatureError:
+        logger.warning("Invalid token signature")
     except Exception as e:
-        logger.warning(f"Token verification failed: {e}")
+        logger.warning("Token verification failed: %s", e)
 
     return False
 
+#   AAD TOKEN (for sending replies to Teams)                   
 
-# ====== BUILD REPLY ======
-def build_reply(activity: dict, text: str) -> dict:
-    return {
-        "type": "message",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "from": {
-            "id": TEAMS_APP_ID,
-            "name": BOT_NAME,
-        },
-        "conversation": activity.get("conversation"),
-        "recipient": activity.get("from"),
-        "replyToId": activity.get("id"),
-        "text": text,
-    }
-
-
-# ====== GET AAD TOKEN ======
 async def get_aad_token() -> str:
-    if _token_cache["token"] and datetime.now(timezone.utc) < _token_cache["expires_at"]:
-        return _token_cache["token"]
+    if aad_token_cache.is_valid:
+        return aad_token_cache.get()
 
-    url = f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/token"
+    url = (
+        f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}"
+        "/oauth2/v2.0/token"
+    )
     payload = {
         "client_id": TEAMS_APP_ID,
         "client_secret": TEAMS_APP_PASSWORD,
@@ -383,62 +472,90 @@ async def get_aad_token() -> str:
     async with session.post(url, data=payload) as resp:
         data = await resp.json()
 
-        token = data.get("access_token")
-        if not token:
-            logger.error(f"Failed to get AAD token: {data}")
-            raise RuntimeError("Failed to obtain AAD token")
+    token = data.get("access_token")
+    if not token:
+        logger.error("Failed to obtain AAD token: %s", data)
+        raise RuntimeError("AAD token request failed")
 
-        expires_in = data.get("expires_in", 3600)
-        _token_cache["token"] = token
-        _token_cache["expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 300)
+    expires_in = data.get("expires_in", 3600)
+    aad_token_cache.set(token, expires_in)
+    logger.info("AAD token refreshed (expires in %ds)", expires_in)
+    return token
 
-        logger.info("AAD token refreshed successfully")
-        return token
+#  OPENAI — generate response                                 
+
+SYSTEM_PROMPT = (
+    "You are a helpful, friendly AI assistant integrated into "
+    "Microsoft Teams. Give clear, concise answers. "
+    "If you don't know something, say so honestly."
+)
+
+ERROR_RESPONSES = {
+    "rate_limit": "I'm getting too many requests right now — please wait a moment and try again.",
+    "auth": "There's an authentication problem with the AI service. Please notify the admin.",
+    "connection": "I'm having trouble reaching the AI service. Please try again shortly.",
+    "empty": "I wasn't able to generate a response. Could you rephrase your question?",
+    "generic": "Something went wrong while processing your request. Please try again.",
+}
 
 
-# ====== CALL OPENAI ======
 async def generate_ai_response(user_message: str) -> str:
-    url = "https://api.openai.com/v1/chat/completions"
+    """Send a message to OpenAI and return the assistant reply."""
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "gpt-4.1-mini",
+        "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": "You are a helpful AI assistant for Microsoft Teams."},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
         "temperature": 0.7,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
     }
 
     try:
         session = await get_session()
-        async with session.post(url, json=payload, headers=headers) as resp:
+        async with session.post(
+            OPENAI_URL, json=payload, headers=headers
+        ) as resp:
             data = await resp.json()
 
+            if resp.status == 429:
+                logger.warning("OpenAI rate limit hit")
+                return ERROR_RESPONSES["rate_limit"]
+
+            if resp.status == 401:
+                logger.error("OpenAI auth error: %s", data)
+                return ERROR_RESPONSES["auth"]
+
             if resp.status != 200:
-                logger.error(f"OpenAI API error [{resp.status}]: {data}")
-                return "Sorry, I encountered an error while processing your request. Please try again later."
+                logger.error("OpenAI error [%d]: %s", resp.status, data)
+                return ERROR_RESPONSES["generic"]
 
             choices = data.get("choices")
-            if not choices or not choices[0].get("message", {}).get("content"):
-                logger.error(f"OpenAI returned no choices: {data}")
-                return "Sorry, I couldn't generate a response. Please try again."
+            if (
+                not choices
+                or not choices[0].get("message", {}).get("content")
+            ):
+                logger.error("OpenAI returned empty choices: %s", data)
+                return ERROR_RESPONSES["empty"]
 
             return choices[0]["message"]["content"]
 
     except aiohttp.ClientError as e:
-        logger.error(f"OpenAI connection error: {e}")
-        return "Sorry, I'm having trouble connecting to the AI service. Please try again later."
+        logger.error("OpenAI connection error: %s", e)
+        return ERROR_RESPONSES["connection"]
     except Exception as e:
-        logger.error(f"Unexpected OpenAI error: {e}")
-        return "Sorry, an unexpected error occurred. Please try again later."
+        logger.error("Unexpected OpenAI error: %s", e)
+        return ERROR_RESPONSES["generic"]
 
+#   SEND REPLY TO TEAMS                                        
 
-# ====== SEND TO TEAMS ======
-async def send_reply(service_url: str, conversation_id: str, reply: dict) -> bool:
+async def send_reply(
+    service_url: str, conversation_id: str, reply: dict
+) -> bool:
     token = await get_aad_token()
     url = f"{service_url}v3/conversations/{conversation_id}/activities"
     headers = {
@@ -449,104 +566,149 @@ async def send_reply(service_url: str, conversation_id: str, reply: dict) -> boo
     try:
         session = await get_session()
         async with session.post(url, json=reply, headers=headers) as resp:
-            if resp.status not in [200, 201]:
-                error_text = await resp.text()
-                logger.error(f"Failed to send reply [{resp.status}]: {error_text}")
-                return False
-
-            return True
-
+            if resp.status in (200, 201):
+                return True
+            error_text = await resp.text()
+            logger.error(
+                "Failed to send reply [%d]: %s", resp.status, error_text
+            )
+            return False
     except aiohttp.ClientError as e:
-        logger.error(f"Connection error sending reply: {e}")
+        logger.error("Connection error sending reply: %s", e)
         return False
     except Exception as e:
-        logger.error(f"Unexpected error sending reply: {e}")
+        logger.error("Unexpected error sending reply: %s", e)
         return False
 
+#   BUILD REPLY ACTIVITY                                       
 
-# ====== MAIN ROUTE ======
+def build_reply(activity: dict, text: str) -> dict:
+    return {
+        "type": "message",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "from": {"id": TEAMS_APP_ID, "name": BOT_NAME},
+        "conversation": activity.get("conversation"),
+        "recipient": activity.get("from"),
+        "replyToId": activity.get("id"),
+        "text": text,
+    }
+
+
+def _is_bot_member(member: dict) -> bool:
+    """Return True if the member is the bot itself."""
+    member_id = member.get("id", "")
+    # Teams bot IDs can be "28:<appId>" or just the appId
+    return (
+        TEAMS_APP_ID in member_id
+        or member_id == TEAMS_APP_ID
+        or member.get("name") == BOT_NAME
+    )
+
+#  MAIN ROUTE  /api/messages                                  
+
 @app.route("/api/messages", methods=["POST"])
 def messages():
     try:
-        # 1) Verify token
+        # ── 1. Auth ──
         auth_header = request.headers.get("Authorization")
         if not verify_token(auth_header):
             return Response(status=401)
 
-        # 2) Parse payload
-        data = request.get_json()
+        # ── 2. Parse ──
+        data = request.get_json(silent=True)
         if not data:
             return Response(status=400)
 
-        activity_type = data.get("type")
+        activity_type = data.get("type", "")
 
-        # 3) Handle message activities only
+        # ── 3. Handle ──
         if activity_type == "message":
-            user_message = data.get("text", "")[:MAX_MESSAGE_LENGTH]
-            from_name = data.get("from", {}).get("name", "User")
-            service_url = data.get("serviceUrl")
-            conv_id = data.get("conversation", {}).get("id")
-
-            if not user_message.strip():
-                logger.info(f"Empty message from {from_name}")
-                return Response("{}", status=200)
-
-            if not service_url or not conv_id:
-                logger.warning("Missing serviceUrl or conversation id")
-                return Response("{}", status=400)
-
-            logger.info(f"Message from {from_name}: {user_message[:100]}...")
-
-            async def process():
-                ai_reply = await generate_ai_response(user_message)
-                reply = build_reply(data, ai_reply)
-                success = await send_reply(service_url, conv_id, reply)
-                if not success:
-                    logger.error(f"Failed to deliver reply to {from_name}")
-
-            run_async(process())
+            _handle_message(data)
 
         elif activity_type == "conversationUpdate":
-            members_added = data.get("membersAdded", [])
-            service_url = data.get("serviceUrl")
-            conv_id = data.get("conversation", {}).get("id")
-
-            async def send_welcome():
-                for member in members_added:
-                    member_id = member.get("id", "")
-                    if TEAMS_APP_ID and TEAMS_APP_ID not in member_id:
-                        welcome = build_reply(data, f"Hello! I'm {BOT_NAME}. Ask me anything!")
-                        await send_reply(service_url, conv_id, welcome)
-
-            if service_url and conv_id:
-                run_async(send_welcome())
+            _handle_conversation_update(data)
 
         else:
-            # conversationUpdate, typing, invoke, etc. — acknowledge silently
-            logger.info(f"Ignoring activity type: {activity_type}")
+            logger.debug("Ignoring activity type: %s", activity_type)
 
         return Response("{}", status=200)
 
     except Exception as e:
-        logger.error(f"Handler error: {e}", exc_info=True)
+        logger.error("Handler error: %s", e, exc_info=True)
         return Response("{}", status=200)
 
 
-# ====== HEALTH CHECK ======
+def _handle_message(data: dict):
+    """Process an incoming message, generate AI reply, send it back."""
+    user_message = (data.get("text") or "").strip()[:MAX_MESSAGE_LENGTH]
+    from_name = data.get("from", {}).get("name", "User")
+    service_url = data.get("serviceUrl")
+    conv_id = data.get("conversation", {}).get("id")
+
+    if not user_message:
+        logger.info("Empty message from %s — skipped", from_name)
+        return
+
+    if not service_url or not conv_id:
+        logger.warning("Missing serviceUrl or conversation id")
+        return
+
+    logger.info("📩 [%s] %s", from_name, user_message[:120])
+
+    async def process():
+        ai_reply = await generate_ai_response(user_message)
+        reply = build_reply(data, ai_reply)
+        ok = await send_reply(service_url, conv_id, reply)
+        status = "✅" if ok else "❌"
+        logger.info("%s Reply to %s (%d chars)", status, from_name, len(ai_reply))
+
+    run_async(process())
+
+
+def _handle_conversation_update(data: dict):
+    """Send a welcome message when the bot is added to a conversation."""
+    members_added = data.get("membersAdded", [])
+    service_url = data.get("serviceUrl")
+    conv_id = data.get("conversation", {}).get("id")
+
+    if not service_url or not conv_id:
+        return
+
+    # Build welcome texts
+    welcome_texts = [
+        f"👋 Hello! I'm **{BOT_NAME}** — your AI assistant.",
+        "Ask me anything and I'll do my best to help!",
+    ]
+    welcome_message = "\n".join(welcome_texts)
+
+    async def send_welcome():
+        for member in members_added:
+            if _is_bot_member(member):
+                continue  # skip the bot itself
+            reply = build_reply(data, welcome_message)
+            await send_reply(service_url, conv_id, reply)
+            logger.info("👋 Sent welcome to %s", member.get("name", "?"))
+
+    run_async(send_welcome())
+
+#   HEALTH & HOME                                              
+
 @app.route("/health")
 def health():
     return {
         "status": "ok",
         "bot": BOT_NAME,
+        "model": OPENAI_MODEL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @app.route("/")
 def home():
-    return "Bot is running 🚀"
+    return f"🤖 {BOT_NAME} is running 🚀"
 
+ #ENTRY POINT                                                
 
-# ====== ENTRY POINT ======
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    logger.info("Starting %s on port %d …", BOT_NAME, PORT)
+    app.run(host="0.0.0.0", port=PORT)
