@@ -240,11 +240,11 @@ from flask import Flask, request, Response
 
 #   CONFIG                                                     
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY","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")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 BOT_NAME = os.environ.get("BOT_NAME", "AI Bot")
-TEAMS_APP_ID = os.environ.get("APP_ID","ac487906-7f7a-47c5-b70b-4df3836c8542")
-TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD","8Iu8Q~wh6FcJZ1p-EO7q0Gsgr1pWQAO~DEEr5aEj")
-TEAMS_TENANT_ID = os.environ.get("APP_TENANT_ID","0ac02500-802f-4a4c-bad2-7cd68064d701")
+TEAMS_APP_ID = os.environ.get("APP_ID")
+TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD")
+TEAMS_TENANT_ID = os.environ.get("APP_TENANT_ID")
 PORT = int(os.environ.get("PORT", 8000))
 
 MAX_MESSAGE_LENGTH = 4000
