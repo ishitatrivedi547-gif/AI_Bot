@@ -240,7 +240,7 @@ from flask import Flask, request, Response
 
 #   CONFIG                                                     
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 BOT_NAME = os.environ.get("BOT_NAME", "AI Bot")
 TEAMS_APP_ID = os.environ.get("APP_ID","ac487906-7f7a-47c5-b70b-4df3836c8542")
 TEAMS_APP_PASSWORD = os.environ.get("APP_PASSWORD","8Iu8Q~wh6FcJZ1p-EO7q0Gsgr1pWQAO~DEEr5aEj")
